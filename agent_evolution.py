@@ -1,5 +1,7 @@
 import json
 from pathlib import Path
+import sys
+import subprocess
 
 def analyze_conversations(json_path):
     with open(json_path, "r", encoding="utf-8") as f:
@@ -90,7 +92,59 @@ def analyze_conversations(json_path):
     
     return failures, rules, skills, prompts
 
+def update_global_configs(rules):
+    # 1. Update Gemini config (~/.gemini/GEMINI.md)
+    gemini_md_path = Path.home() / ".gemini" / "GEMINI.md"
+    try:
+        gemini_md_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_content = ""
+        if gemini_md_path.exists():
+            existing_content = gemini_md_path.read_text(encoding="utf-8")
+            
+        new_rules_text = ""
+        for rule in rules:
+            rule_header = f"## {rule['name']}"
+            if rule_header not in existing_content:
+                new_rules_text += f"\n{rule_header}\n{rule['description']}\n"
+                
+        if new_rules_text:
+            with open(gemini_md_path, "a", encoding="utf-8") as f:
+                if existing_content and not existing_content.endswith("\n"):
+                    f.write("\n")
+                f.write("\n# Agent Evolution Rules\n" + new_rules_text)
+            print(f"Added new rules to Gemini config: {gemini_md_path}")
+    except Exception as e:
+        print(f"Failed to update Gemini config: {e}")
+        
+    # 2. Update Claude config (~/.clauderc)
+    claude_rc_path = Path.home() / ".clauderc"
+    try:
+        existing_rc_content = ""
+        if claude_rc_path.exists():
+            existing_rc_content = claude_rc_path.read_text(encoding="utf-8")
+            
+        new_rc_text = ""
+        for rule in rules:
+            rule_name = rule['name']
+            if rule_name not in existing_rc_content:
+                new_rc_text += f"\n# {rule_name}\n{rule['description']}\n"
+                
+        if new_rc_text:
+            with open(claude_rc_path, "a", encoding="utf-8") as f:
+                if existing_rc_content and not existing_rc_content.endswith("\n"):
+                    f.write("\n")
+                if not existing_rc_content:
+                    f.write("# Claude Code Global Custom Rules\n")
+                else:
+                    f.write("\n# Agent Evolution Rules\n")
+                f.write(new_rc_text)
+            print(f"Added new rules to Claude config: {claude_rc_path}")
+    except Exception as e:
+        print(f"Failed to update Claude config: {e}")
+
 def main():
+    import socket
+    
     json_path = Path(__file__).resolve().parent / "extracted" / "extracted_conversations.json"
     if not json_path.exists():
         print(f"Extraction file not found at {json_path}. Please run extract_history.py first.")
@@ -132,6 +186,34 @@ def main():
             f.write(f"- **[{p['project']}]** \"{p['prompt']}\"\n")
             
     print(f"Saved agent evolution plan to {output_path}")
+    
+    # Copy rules to global configs
+    update_global_configs(rules)
+    
+    # Check if cockpit is already running on port 3000
+    cockpit_running = False
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(('localhost', 3000)) == 0:
+                cockpit_running = True
+    except Exception:
+        pass
+        
+    if cockpit_running:
+        print("\n🚀 Agent Evolution Web Cockpit is already running on http://localhost:3000")
+        print("👉 Load http://localhost:3000 to view your interactive trajectories and stage rules/skills!")
+    else:
+        print("\n🚀 Starting Agent Evolution Web Cockpit in the background...")
+        try:
+            run_app_path = Path(__file__).resolve().parent / "run_app.py"
+            log_file = Path(__file__).resolve().parent / "extracted" / "cockpit.log"
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_file, "a") as f:
+                subprocess.Popen([sys.executable, str(run_app_path)], stdout=f, stderr=f, start_new_session=True)
+            print("👉 Web Cockpit started successfully!")
+            print("👉 Open http://localhost:3000 to view your interactive trajectories and stage rules/skills!")
+        except Exception as e:
+            print(f"Failed to start Web Cockpit in the background: {e}")
 
 if __name__ == "__main__":
     main()

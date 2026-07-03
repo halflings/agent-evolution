@@ -14,17 +14,21 @@ Use this skill when you need to analyze past conversation trajectories (from bot
 
 When this skill is triggered, you must perform the following actions:
 
-### Step 1. Run the Extraction Script
-Locate and run the python extraction script to compile all raw session files into a unified JSON database.
+### Step 1. Run the Extraction and Analysis Scripts
+Locate and run the python extraction script to compile all raw session files into a unified JSON database. Then run the agent evolution analysis script to generate recommendations, copy them into global configs, and launch the Web Cockpit.
 > [!NOTE]
-> The extraction script has **zero external dependencies** and runs on any standard Python 3 interpreter.
+> The scripts have **zero external dependencies** and run on any standard Python 3 interpreter.
 
 ```bash
 python3 extract_history.py
+python3 agent_evolution.py
 ```
 This produces:
 *   Unified database: `extracted/extracted_conversations.json`
 *   Human-readable log: `extracted/extracted_conversations.md`
+*   Analysis Plan: `extracted/agent_evolution_plan.md`
+*   Global Config Updates: Appends rules to `~/.gemini/GEMINI.md` and `~/.clauderc`
+*   Web Cockpit: Launches server on `http://localhost:3000` in the background.
 
 ### Step 2. Read and Analyze the Trajectories
 Open and read `extracted/extracted_conversations.json`. Perform a deep LLM analysis of the turns to identify the following patterns:
@@ -37,8 +41,9 @@ Open and read `extracted/extracted_conversations.json`. Perform a deep LLM analy
 For each identified pattern, formulate a concrete recommendation. Write these recommendations directly to the central analysis plan:
 *   **Plan MD**: Write rules and custom skills into the central plan at `extracted/agent_evolution_plan.md`.
 
-### Step 4. Report Findings
+### Step 4. Report Findings and Direct User to Cockpit
 Present the user with a summary of:
 *   The sessions analyzed.
 *   A list of identified failure/success patterns.
-*   The recommended system rules and custom skills that can be imported or staged.
+*   The recommended system rules and custom skills that have been copied to global configurations.
+*   **Important**: Prompt the user to load the interactive Web Cockpit at `http://localhost:3000` to visually inspect trajectories and rule staging.
