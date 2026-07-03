@@ -8,55 +8,7 @@ def analyze_conversations(json_path):
     # which are dynamically produced by the agent executing the skill manifest.
     return [], [], [], []
 
-def update_global_configs(rules):
-    # 1. Update Gemini config (~/.gemini/GEMINI.md)
-    gemini_md_path = Path.home() / ".gemini" / "GEMINI.md"
-    try:
-        gemini_md_path.parent.mkdir(parents=True, exist_ok=True)
-        existing_content = ""
-        if gemini_md_path.exists():
-            existing_content = gemini_md_path.read_text(encoding="utf-8")
-            
-        new_rules_text = ""
-        for rule in rules:
-            rule_header = f"## {rule['name']}"
-            if rule_header not in existing_content:
-                new_rules_text += f"\n{rule_header}\n{rule['description']}\n"
-                
-        if new_rules_text:
-            with open(gemini_md_path, "a", encoding="utf-8") as f:
-                if existing_content and not existing_content.endswith("\n"):
-                    f.write("\n")
-                f.write("\n# Agent Evolution Rules\n" + new_rules_text)
-            print(f"Added new rules to Gemini config: {gemini_md_path}")
-    except Exception as e:
-        print(f"Failed to update Gemini config: {e}")
-        
-    # 2. Update Claude config (~/.clauderc)
-    claude_rc_path = Path.home() / ".clauderc"
-    try:
-        existing_rc_content = ""
-        if claude_rc_path.exists():
-            existing_rc_content = claude_rc_path.read_text(encoding="utf-8")
-            
-        new_rc_text = ""
-        for rule in rules:
-            rule_name = rule['name']
-            if rule_name not in existing_rc_content:
-                new_rc_text += f"\n# {rule_name}\n{rule['description']}\n"
-                
-        if new_rc_text:
-            with open(claude_rc_path, "a", encoding="utf-8") as f:
-                if existing_rc_content and not existing_rc_content.endswith("\n"):
-                    f.write("\n")
-                if not existing_rc_content:
-                    f.write("# Claude Code Global Custom Rules\n")
-                else:
-                    f.write("\n# Agent Evolution Rules\n")
-                f.write(new_rc_text)
-            print(f"Added new rules to Claude config: {claude_rc_path}")
-    except Exception as e:
-        print(f"Failed to update Claude config: {e}")
+
 
 def main():
     import socket
@@ -124,9 +76,6 @@ def main():
             f.write(f"- **[{p.get('project', 'N/A')}]** \"{p.get('prompt', '')}\"\n")
             
     print(f"Saved agent evolution plan markdown to {output_path}")
-    
-    # Copy rules to global configs
-    update_global_configs(rules)
     
     # Check if cockpit backend is already running on port 8080
     cockpit_running = False

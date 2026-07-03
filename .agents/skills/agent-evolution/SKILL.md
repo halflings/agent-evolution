@@ -64,15 +64,24 @@ Synthesize your findings and write the recommended improvements directly into `e
 }
 ```
 
-### Step 4. Run the Evolution Sync Script
-Once the `extracted/agent_evolution_plan.json` file has been written, run the agent evolution script:
+### Step 4. Update Global Configurations with LLM
+Instead of blindly appending rules, open the global configuration files directly:
+*   **Gemini Config**: `~/.gemini/GEMINI.md`
+*   **Claude Config**: `~/.clauderc`
+
+Read their existing contents and dynamically merge the new rules from `extracted/agent_evolution_plan.json`. Ensure you:
+*   Identify and remove/rewrite any conflicting or redundant rules.
+*   Merge new guidelines seamlessly into existing categories/headers.
+*   Maintain clean markdown formatting.
+
+### Step 5. Run the Cockpit & Sync Script
+Once configurations are updated, execute the evolution script:
 ```bash
 python3 agent_evolution.py
 ```
 This script will:
 *   Generate the formatted markdown plan at `extracted/agent_evolution_plan.md`.
-*   Directly apply the rules to your global user rules (appending to `~/.gemini/GEMINI.md` and `~/.clauderc`).
-*   Launch the interactive Web Cockpit dev server (Uvicorn backend on port `8080` + Next.js frontend on port `3000` or `3001` if occupied).
+*   Verify and launch the interactive Web Cockpit dev server (Uvicorn backend on port `8080` + Next.js frontend on port `3000`/`3001` if occupied) in the background.
 
-### Step 5. Report Findings and Direct User to Cockpit
-Present the user with a summary of the analyzed sessions, the rules applied globally, and direct the user to load the Web Cockpit UI at `http://localhost:3000` (or `http://localhost:3001` if port 3000 is occupied) to visually explore trajectories and rules.
+### Step 6. Report Findings and Direct User to Cockpit
+Present the user with a summary of the analyzed sessions, the rules you have seamlessly merged into global configurations, and direct them to load the Web Cockpit UI at `http://localhost:3000` (or `http://localhost:3001` if port 3000 is occupied).
