@@ -24,6 +24,7 @@ app.add_middleware(
 EXTRACTED_DIR = Path(__file__).resolve().parent / "extracted"
 CONVERSATIONS_JSON = EXTRACTED_DIR / "extracted_conversations.json"
 PLAN_MD = EXTRACTED_DIR / "agent_evolution_plan.md"
+PLAN_JSON = EXTRACTED_DIR / "agent_evolution_plan.json"
 
 class ApplyRuleRequest(BaseModel):
     project_path: str
@@ -41,8 +42,7 @@ def refresh_data():
     """Triggers the extraction and agent evolution analysis scripts."""
     try:
         extract_history.main()
-        # Re-run agent evolution analysis
-        failures, rules, skills, prompts = agent_evolution.analyze_conversations(CONVERSATIONS_JSON)
+        # Re-run agent evolution config sync and server checks
         agent_evolution.main()
         return {"status": "success", "message": "History and analysis refreshed successfully."}
     except Exception as e:
@@ -92,16 +92,20 @@ def get_session_detail(session_id: str):
 @app.get("/api/improvement-plan")
 def get_improvement_plan():
     """Returns the synthesized rules, skills, and past prompts."""
-    if not CONVERSATIONS_JSON.exists():
-        refresh_data()
-        
+    if not PLAN_JSON.exists():
+        # Create an empty initial plan if it doesn't exist
+        EXTRACTED_DIR.mkdir(parents=True, exist_ok=True)
+        with open(PLAN_JSON, "w", encoding="utf-8") as f:
+            json.dump({"failures": [], "rules": [], "skills": [], "prompts": []}, f, indent=2)
+            
     try:
-        failures, rules, skills, prompts = agent_evolution.analyze_conversations(CONVERSATIONS_JSON)
+        with open(PLAN_JSON, "r", encoding="utf-8") as f:
+            plan_data = json.load(f)
         return {
-            "failures": failures,
-            "rules": rules,
-            "skills": skills,
-            "prompts": prompts
+            "failures": plan_data.get("failures", []),
+            "rules": plan_data.get("rules", []),
+            "skills": plan_data.get("skills", []),
+            "prompts": plan_data.get("prompts", [])
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

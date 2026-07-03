@@ -299,7 +299,7 @@ def main():
         print(f"Antigravity tmp directory not found at {gemini_tmp}")
         
     # Write to a clean JSON file
-    output_dir = Path(__file__).resolve().parents[3] / "extracted"
+    output_dir = Path(__file__).resolve().parents[4] / "extracted"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     json_output_path = output_dir / "extracted_conversations.json"
