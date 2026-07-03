@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# Next.js and Node.js files
+node_modules/
+.next/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Environment files
+.env
+.env.local
+
+# Extracted private history/logs (do not commit to public repository)
+extracted/
+
+# OS files
+.DS_Store
