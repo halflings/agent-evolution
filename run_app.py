@@ -11,15 +11,15 @@ def find_next_free_port(start_port):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(('127.0.0.1', port))
+                s.bind(('0.0.0.0', port))
                 return port
         except OSError:
             port += 1
 
 def run_backend(port):
     print(f"[Backend] Starting FastAPI server on http://localhost:{port}...")
-    # Run uvicorn using uv run
-    cmd = ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(port)]
+    # Run uvicorn using uv run python -m uvicorn
+    cmd = ["uv", "run", "python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(port)]
     try:
         subprocess.run(cmd, check=True)
     except KeyboardInterrupt:
