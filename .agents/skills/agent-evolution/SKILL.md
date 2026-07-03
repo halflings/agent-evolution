@@ -81,7 +81,25 @@ python3 agent_evolution.py
 ```
 This script will:
 *   Generate the formatted markdown plan at `extracted/agent_evolution_plan.md`.
-*   Verify and launch the interactive Web Cockpit dev server (Uvicorn backend on port `8080` + Next.js frontend on port `3000`/`3001` if occupied) in the background.
+*   Verify and launch the interactive Web Cockpit dev server (which automatically finds available ports) in the background.
 
-### Step 6. Report Findings and Direct User to Cockpit
-Present the user with a summary of the analyzed sessions, the rules you have seamlessly merged into global configurations, and direct them to load the Web Cockpit UI at `http://localhost:3000` (or `http://localhost:3001` if port 3000 is occupied).
+### Step 6. Report Findings Visually and Direct User to Cockpit
+Present the findings to the user. **You must format this report visually using an ASCII table or box layout.** For example:
+
+```
+┌────────────────────────────────────────────────────────┐
+│             AGENT EVOLUTION ANALYSIS REPORT            │
+├────────────────────────────────────────────────────────┤
+│  Sessions Scraped: [Count]                             │
+│  Failure Patterns Found: [Count]                       │
+├────────────────────────────────────────────────────────┤
+│  [x] File Location Proactivity -> Merged to ~/.gemini   │
+│  [x] Modular Testing -> Merged to ~/.clauderc          │
+└────────────────────────────────────────────────────────┘
+```
+
+Ensure your response includes:
+1.  The visual ASCII report summarizing the findings.
+2.  A detailed list of identified failure/success patterns.
+3.  Clickable file links to the updated global configs (`~/.gemini/GEMINI.md` and `~/.clauderc`) and the central plan (`extracted/agent_evolution_plan.md`).
+4.  A prompt directing the user to visit the Web Cockpit UI (usually `http://localhost:3000` or the next available port).

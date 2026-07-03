@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from "react";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+
 interface SessionSummary {
   session_id: string;
   project_path: string;
@@ -86,7 +88,7 @@ export default function Home() {
 
   const fetchSessions = async () => {
     try {
-      const res = await fetch("http://localhost:8080/api/sessions");
+      const res = await fetch(`${API_BASE}/api/sessions`);
       if (res.ok) {
         const data = await res.json();
         setSessions(data);
@@ -98,7 +100,7 @@ export default function Home() {
 
   const fetchPlan = async () => {
     try {
-      const res = await fetch("http://localhost:8080/api/improvement-plan");
+      const res = await fetch(`${API_BASE}/api/improvement-plan`);
       if (res.ok) {
         const data = await res.json();
         setPlan(data);
@@ -123,7 +125,7 @@ export default function Home() {
   const fetchSessionDetail = async (id: string) => {
     setIsLoading(true);
     try {
-      const res = await fetch(`http://localhost:8080/api/sessions/${id}`);
+      const res = await fetch(`${API_BASE}/api/sessions/${id}`);
       if (res.ok) {
         const data = await res.json();
         setActiveSession(data);
@@ -139,7 +141,7 @@ export default function Home() {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
-      const res = await fetch("http://localhost:8080/api/refresh", { method: "POST" });
+      const res = await fetch(`${API_BASE}/api/refresh`, { method: "POST" });
       if (res.ok) {
         await fetchSessions();
         await fetchPlan();
@@ -168,7 +170,7 @@ export default function Home() {
     }
 
     try {
-      const res = await fetch("http://localhost:8080/api/apply-rule", {
+      const res = await fetch(`${API_BASE}/api/apply-rule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -198,7 +200,7 @@ export default function Home() {
     }
 
     try {
-      const res = await fetch("http://localhost:8080/api/apply-skill", {
+      const res = await fetch(`${API_BASE}/api/apply-skill`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -230,7 +232,7 @@ export default function Home() {
     }
 
     try {
-      const res = await fetch("http://localhost:8080/api/apply-rule", {
+      const res = await fetch(`${API_BASE}/api/apply-rule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
