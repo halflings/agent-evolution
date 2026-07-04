@@ -1,8 +1,44 @@
 import os
+import re
 import json
 import glob
 from pathlib import Path
 from datetime import datetime
+from collections import Counter, defaultdict
+
+# --- Privacy: redact secrets before anything is written to disk or served ---
+_SECRET_PATTERNS = [
+    re.compile(r"sk-[A-Za-z0-9_-]{16,}"),                 # OpenAI-style keys
+    re.compile(r"sk-ant-[A-Za-z0-9_-]{16,}"),             # Anthropic keys
+    re.compile(r"AIza[A-Za-z0-9_-]{20,}"),                # Google API keys
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),            # GitHub tokens
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),          # GitHub fine-grained PAT
+    re.compile(r"AKIA[0-9A-Z]{16}"),                      # AWS access key id
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),          # Slack tokens
+    re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),  # JWTs
+    re.compile(r"(?i)(authorization|bearer|api[_-]?key|secret|password|token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{12,}"),
+]
+
+
+def redact_secrets(text):
+    """Replace likely secrets/credentials with a placeholder. Best-effort, not exhaustive."""
+    if not isinstance(text, str):
+        return text
+    for pat in _SECRET_PATTERNS:
+        text = pat.sub("[REDACTED]", text)
+    return text
+
+
+def redact_session(session):
+    """Return a deep-ish copy of a session with string content redacted."""
+    for turn in session.get("turns", []):
+        if isinstance(turn.get("content"), str):
+            turn["content"] = redact_secrets(turn["content"])
+        turn["thinking"] = redact_secrets(turn.get("thinking", "")) if turn.get("thinking") else turn.get("thinking", "")
+        for tc in turn.get("tool_calls", []):
+            if isinstance(tc.get("input"), dict):
+                tc["input"] = {k: redact_secrets(v) if isinstance(v, str) else v for k, v in tc["input"].items()}
+    return session
 
 def clean_user_content(content):
     """
@@ -39,7 +75,8 @@ def clean_user_content(content):
             elif item_type == "tool_result":
                 tool_content = item.get("content", "")
                 tool_id = item.get("tool_use_id", "")
-                parts.append(f"[Tool Result for {tool_id}]: {tool_content}")
+                err = " [ERROR]" if item.get("is_error") else ""
+                parts.append(f"[Tool Result for {tool_id}]{err}: {tool_content}")
         if parts:
             return "\n".join(parts)
         
@@ -91,14 +128,17 @@ def parse_session_file(file_path):
             clean_content = clean_user_content(raw_content)
             
             is_tool_result = False
+            is_error = False
             if isinstance(raw_content, list):
                 is_tool_result = any(item.get("type") == "tool_result" for item in raw_content if isinstance(item, dict))
-                
+                is_error = any(item.get("is_error") for item in raw_content if isinstance(item, dict))
+
             if clean_content:
                 turns.append({
                     "role": "user",
                     "type": "tool_result" if is_tool_result else "prompt",
                     "content": clean_content,
+                    "is_error": is_error,
                     "timestamp": event.get("timestamp")
                 })
                 
@@ -268,6 +308,94 @@ def parse_antigravity_session(file_path):
         "turns": turns
     }
 
+def _normalize_command(cmd):
+    """Collapse whitespace so near-identical commands compare equal."""
+    return re.sub(r"\s+", " ", str(cmd)).strip()
+
+
+def compute_signals(sessions):
+    """Pre-compute ATTENTION MARKERS to direct where an analyst should read closely.
+
+    These are deliberately shallow pointers (indices + short quotes), NOT findings. The deep
+    reading in the skill's MAP step decides what is actually a pattern.
+    """
+    out = []
+    for s in sessions:
+        turns = s.get("turns", [])
+        interruptions, tool_errors = [], []
+        cmd_counter = Counter()
+        cmd_first_turn = {}
+        edited_files = defaultdict(list)
+
+        for i, t in enumerate(turns):
+            content = str(t.get("content", ""))
+            if "[Request interrupted by user]" in content or "interrupted by user for tool use" in content:
+                interruptions.append(i)
+            if t.get("role") == "user" and t.get("type") == "tool_result":
+                if t.get("is_error") or "[ERROR]" in content:
+                    tool_errors.append({"turn": i, "quote": content[:160]})
+            for tc in t.get("tool_calls", []):
+                name = tc.get("name")
+                inp = tc.get("input") if isinstance(tc.get("input"), dict) else {}
+                if name == "Bash" and inp.get("command"):
+                    norm = _normalize_command(inp["command"])
+                    cmd_counter[norm] += 1
+                    cmd_first_turn.setdefault(norm, i)
+                if name in ("Edit", "Write", "NotebookEdit") and inp.get("file_path"):
+                    edited_files[inp["file_path"]].append(i)
+
+        repeated_commands = [
+            {"command": c[:120], "count": n, "first_turn": cmd_first_turn[c]}
+            for c, n in cmd_counter.most_common() if n >= 2
+        ]
+        # Files touched 3+ times are candidate rework/churn loops worth reading closely.
+        edit_loops = [
+            {"file": f, "edit_turns": idxs} for f, idxs in edited_files.items() if len(idxs) >= 3
+        ]
+
+        out.append({
+            "session_id": s.get("session_id"),
+            "project_path": s.get("project_path"),
+            "title": s.get("title"),
+            "turns": len(turns),
+            "interruptions": interruptions,
+            "tool_errors": tool_errors,
+            "repeated_commands": repeated_commands,
+            "edit_loops": edit_loops,
+        })
+    return out
+
+
+def render_session_markdown(sess):
+    """Render a single (already redacted) session to markdown for per-session chunk files."""
+    lines = [f"# Session: {sess['title'] or sess['session_id']}",
+             f"- **Project:** `{sess['project_path']}` ({sess['project_name']})",
+             f"- **Session ID:** `{sess['session_id']}`", ""]
+    for i, turn in enumerate(sess["turns"]):
+        role = turn["role"].capitalize()
+        t_type = turn.get("type", "")
+        if role == "User":
+            tag = "User (Tool Result)" if t_type == "tool_result" else "User"
+            err = " [ERROR]" if turn.get("is_error") else ""
+            lines.append(f"### [{tag}{err}] Turn {i+1}")
+            lines.append(f"```\n{turn['content']}\n```" if t_type == "tool_result" else turn["content"])
+            lines.append("")
+        elif role == "Assistant":
+            lines.append(f"### [Assistant] Turn {i+1}")
+            if turn.get("thinking"):
+                lines.append(f"<details><summary>Thinking</summary>\n\n{turn['thinking']}\n</details>")
+            for tc in turn.get("tool_calls", []):
+                lines.append(f"- **Tool:** `{tc['name']}` input: `{json.dumps(tc['input'])[:400]}`")
+            if turn.get("content"):
+                lines.append(turn["content"])
+            lines.append("")
+        elif role == "System":
+            lines.append(f"### [System ({t_type})] Turn {i+1}")
+            lines.append(turn["content"])
+            lines.append("")
+    return "\n".join(lines)
+
+
 def main():
     # 1. Parse Claude project sessions
     claude_dir = Path.home() / ".claude"
@@ -298,10 +426,28 @@ def main():
     else:
         print(f"Antigravity tmp directory not found at {gemini_tmp}")
         
+    # Redact secrets before ANYTHING is written to disk (privacy: these are raw transcripts).
+    all_sessions = [redact_session(s) for s in all_sessions]
+
     # Write to a clean JSON file
     output_dir = Path(__file__).resolve().parents[4] / "extracted"
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
+    # Pre-computed attention signals to direct deep reading (not findings themselves).
+    signals = compute_signals(all_sessions)
+    signals_path = output_dir / "signals.json"
+    with open(signals_path, "w", encoding="utf-8") as f:
+        json.dump(signals, f, indent=2)
+    print(f"Saved attention signals to {signals_path}")
+
+    # One readable file per session — the unit the MAP step fans out over.
+    sessions_dir = output_dir / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    for sess in all_sessions:
+        (sessions_dir / f"{sess['session_id']}.md").write_text(
+            render_session_markdown(sess), encoding="utf-8")
+    print(f"Saved {len(all_sessions)} per-session chunk files to {sessions_dir}")
+
     json_output_path = output_dir / "extracted_conversations.json"
     with open(json_output_path, "w", encoding="utf-8") as f:
         json.dump(all_sessions, f, indent=2)
