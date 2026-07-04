@@ -1,7 +1,43 @@
 import json
 from pathlib import Path
 import pytest
-from extract_history_lib import clean_user_content, parse_session_file, parse_antigravity_session
+from extract_history_lib import (
+    clean_user_content,
+    parse_session_file,
+    parse_antigravity_session,
+    redact_secrets,
+    compute_signals,
+)
+
+
+def test_redact_secrets():
+    assert redact_secrets("token sk-ant-abcdefghijklmnop1234") == "token [REDACTED]"
+    assert "[REDACTED]" in redact_secrets("key=AIzaSyABCDEFGHIJKLMNOPQRSTUVWX12345")
+    assert redact_secrets("nothing secret here") == "nothing secret here"
+    assert redact_secrets(None) is None
+
+
+def test_clean_user_content_error_flag():
+    content = [{"type": "tool_result", "tool_use_id": "t1", "content": "boom", "is_error": True}]
+    assert "[Tool Result for t1] [ERROR]: boom" in clean_user_content(content)
+
+
+def test_compute_signals_detects_patterns():
+    sessions = [{
+        "session_id": "s1",
+        "project_path": "/p",
+        "title": "t",
+        "turns": [
+            {"role": "user", "type": "prompt", "content": "[Request interrupted by user]"},
+            {"role": "user", "type": "tool_result", "content": "fail", "is_error": True},
+            {"role": "assistant", "tool_calls": [{"name": "Bash", "input": {"command": "npm run build"}}]},
+            {"role": "assistant", "tool_calls": [{"name": "Bash", "input": {"command": "npm  run   build"}}]},
+        ],
+    }]
+    sig = compute_signals(sessions)[0]
+    assert sig["interruptions"] == [0]
+    assert sig["tool_errors"] and sig["tool_errors"][0]["turn"] == 1
+    assert any(c["count"] == 2 for c in sig["repeated_commands"])
 
 def test_clean_user_content_caveat():
     content = "<local-command-caveat>Test Caveat</local-command-caveat>"

@@ -36,7 +36,11 @@ This runs:
 ### Custom Agent Skill
 The workspace is formatted as a reusable Custom Skill:
 * **Manifest**: `.agents/skills/agent-evolution/SKILL.md`
-* **Behavior**: Automates raw log scraping (Claude & Antigravity), runs trajectory diagnostics, generates tailored system rules, updates global configs (`~/.gemini/GEMINI.md` & `~/.clauderc`), and starts the dashboard in the background.
+* **Behavior**:
+  1. Scrapes raw logs (Claude & Antigravity), **redacting secrets**, into per-session chunk files plus a `signals.json` index of attention markers (interruptions, tool errors, repeated commands, edit/revert loops).
+  2. **Reads every trace in full** — fanning out with read-only subagents (one per session/chunk) or iterating — guided by a subtle-issue rubric, instead of keyword sampling.
+  3. Distills **general, transferable rules** (generalization filter, cited evidence, confidence, de-duplication), routing stack-agnostic behavior to your global `~/AGENTS.md` and project-specific facts to `<project>/AGENTS.md`.
+  4. Renders the plan with **no side effects**. The web dashboard is **opt-in** (`python3 agent_evolution.py --serve`) and binds to `127.0.0.1` only (it serves raw transcripts).
 
 ### Running Tests
 Verify parsers, scrapers, and API endpoints:

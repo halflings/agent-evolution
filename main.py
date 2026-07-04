@@ -101,9 +101,14 @@ def get_improvement_plan():
     try:
         with open(PLAN_JSON, "r", encoding="utf-8") as f:
             plan_data = json.load(f)
+        global_rules = plan_data.get("global_rules", []) or plan_data.get("rules", [])
         return {
+            "meta": plan_data.get("meta", {}),
             "failures": plan_data.get("failures", []),
-            "rules": plan_data.get("rules", []),
+            "successes": plan_data.get("successes", []),
+            "rules": global_rules,
+            "global_rules": global_rules,
+            "project_rules": plan_data.get("project_rules", []),
             "skills": plan_data.get("skills", []),
             "prompts": plan_data.get("prompts", [])
         }
@@ -121,8 +126,13 @@ def apply_rule(req: ApplyRuleRequest):
     agents_dir.mkdir(exist_ok=True)
     agents_md = agents_dir / "AGENTS.md"
     
+    # Dedupe: don't append a rule whose header already exists (keeps AGENTS.md tight over runs).
+    existing = agents_md.read_text(encoding="utf-8") if agents_md.exists() else ""
+    if f"# {req.rule_name}\n" in existing or f"# {req.rule_name}\r\n" in existing:
+        return {"status": "skipped", "message": f"Rule '{req.rule_name}' already present in {agents_md}"}
+
     rule_formatted = f"\n# {req.rule_name}\n{req.rule_content}\n"
-    
+
     try:
         with open(agents_md, "a", encoding="utf-8") as f:
             f.write(rule_formatted)
@@ -164,4 +174,5 @@ description: {req.skill_description}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    # Loopback only: this API serves raw conversation transcripts; do not expose on the network.
+    uvicorn.run("main:app", host="127.0.0.1", port=8080, reload=True)
