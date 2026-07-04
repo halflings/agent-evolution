@@ -13,9 +13,7 @@
 
 To run this agent skill, copy and paste the following prompt into your coding agent:
 
-> Please use your terminal tools to clone the `agent-evolution` skill from `https://github.com/halflings/agent-evolution.git` into the standard cross-agent directory `.agents/skills/agent-evolution/`. 
-> 
-> Once downloaded, read its manifest at `.agents/skills/agent-evolution/SKILL.md` to understand its context and requirements. Finally, execute the skill according to its instructions to analyze my past logs and update my workspace rules (`AGENTS.md`).
+> Clone `https://github.com/halflings/agent-evolution.git` into `.agents/skills/agent-evolution/`, then read `.agents/skills/agent-evolution/SKILL.md` and follow its instructions.
 
 ---
 
