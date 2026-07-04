@@ -34,6 +34,26 @@ These principles govern every step below. When in doubt, favor them over volume 
    of high-confidence items. A short, sharp list beats a long generic one.
 6. **Weight successes too.** Reinforcing what reliably worked is as valuable as fixing failures.
 
+## Data retention & coverage (read before trusting session counts)
+
+The corpus you can read is only what survives on disk, which is often **far less than the user
+actually ran**:
+
+* **Claude Code prunes old transcripts.** Full session transcripts (`~/.claude/projects/*/*.jsonl`)
+  are auto-deleted once older than `cleanupPeriodDays` (**default 30 days**). The prompt-level log
+  `~/.claude/history.jsonl` survives longer, so it can reference many sessions whose transcripts are
+  already gone. `extract_history.py` compares the two and prints a **`RETENTION WARNING`** when
+  transcripts are missing. Pruned transcripts are **unrecoverable** — do not promise to analyze them.
+* **Antigravity** stores one transcript per session at
+  `~/.gemini/antigravity-{cli,ide}/brain/<id>/.system_generated/logs/transcript.jsonl` (a legacy
+  `~/.gemini/tmp/*/chats/session-*.json` format is also supported).
+
+**When coverage is thin (few sessions, or a `RETENTION WARNING` fired):** say so honestly, scale
+ambition to the surviving signal (principle 5), **and** proactively tell the user their history is
+being auto-deleted. Offer to raise retention so future runs have more to learn from — e.g. set
+`cleanupPeriodDays` in `~/.claude/settings.json` to a much larger value (enough to retain roughly the
+last ~100 sessions). **Ask for confirmation before editing their settings**; it is their machine.
+
 ## Execution workflow
 
 ### Step 1 — Compile the history + attention signals
@@ -50,6 +70,10 @@ This produces, under `extracted/`:
 * `signals.json` — pre-computed *attention markers* per session (interruptions, tool errors,
   repeated commands, edit/revert loops). These direct where to read closely; they are **not**
   findings.
+
+Watch the script's output for a **`RETENTION WARNING`** (see *Data retention & coverage* above): if
+it fires, some Claude transcripts were already auto-deleted and cannot be analyzed — factor that into
+your coverage claims and raise it with the user.
 
 ### Step 2 — MAP: read every trace in full (subagents / iteration)
 For each session (splitting very long sessions into turn-range chunks), have an agent read the
@@ -138,7 +162,8 @@ Present a concise visual summary (ASCII box) plus:
 2. What worked (successes worth reinforcing).
 3. Where each rule was routed (global vs which project), and clickable links to the updated files
    and `extracted/agent_evolution_plan.md`.
-4. If signal was thin, say so honestly rather than padding the list.
+4. If signal was thin, say so honestly rather than padding the list. If a `RETENTION WARNING` fired,
+   report how many sessions were pruned and offer to raise `cleanupPeriodDays` (with confirmation).
 
 ```
 ┌────────────────────────────────────────────────────────┐

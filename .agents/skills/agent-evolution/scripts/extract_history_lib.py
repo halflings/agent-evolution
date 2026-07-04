@@ -308,6 +308,182 @@ def parse_antigravity_session(file_path):
         "turns": turns
     }
 
+# --- Antigravity (current "brain" transcript format) ---------------------------------------
+# Modern Antigravity/Gemini stores one JSONL transcript per session at
+#   ~/.gemini/antigravity-{cli,ide}/brain/<session_id>/.system_generated/logs/transcript.jsonl
+# Each line is a "step" record: {step_index, source, type, status, created_at, content, tool_calls?}.
+# (The legacy ~/.gemini/tmp/*/chats/session-*.json format is still handled by
+# parse_antigravity_session above.)
+
+# Step types that are conversation framing rather than a user prompt or model turn.
+_ANTIGRAVITY_SYSTEM_TYPES = {
+    "CHECKPOINT", "SYSTEM_MESSAGE", "CONVERSATION_HISTORY", "KNOWLEDGE_ARTIFACTS",
+}
+_USER_REQUEST_RE = re.compile(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", re.DOTALL)
+# Absolute project roots look like /home/<user>/workspace/<project> (or /Users/...). The brain's
+# own artifacts live under ~/.gemini, so a workspace-scoped match reliably picks the real project.
+_WORKSPACE_PATH_RE = re.compile(r"/(?:home|Users)/[^/\s\"']+/workspace/[^/\s\"':]+")
+
+
+def _extract_user_request(text):
+    """Pull the human request out of Antigravity's <USER_REQUEST>...</USER_REQUEST> wrapper,
+    dropping the appended <ADDITIONAL_METADATA>/<USER_SETTINGS_CHANGE> noise."""
+    if not isinstance(text, str):
+        return text
+    m = _USER_REQUEST_RE.search(text)
+    return (m.group(1) if m else text).strip()
+
+
+def _infer_antigravity_project(records, fallback):
+    """Best-effort project path: the most-referenced /.../workspace/<project> root across the
+    transcript's tool-call args and content. Falls back when nothing workspace-scoped appears."""
+    counter = Counter()
+    for r in records:
+        blobs = []
+        if isinstance(r.get("content"), str):
+            blobs.append(r["content"])
+        for tc in (r.get("tool_calls") or []):
+            args = tc.get("args")
+            if isinstance(args, dict):
+                blobs.extend(v for v in args.values() if isinstance(v, str))
+        for b in blobs:
+            for match in _WORKSPACE_PATH_RE.findall(b):
+                counter[match] += 1
+    return counter.most_common(1)[0][0] if counter else fallback
+
+
+def parse_antigravity_transcript(file_path):
+    """Parse a modern Antigravity brain transcript.jsonl into the unified session schema."""
+    file_path = Path(file_path)
+    records = []
+    with open(file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except Exception as e:
+                print(f"Error parsing line in {file_path}: {e}")
+    if not records:
+        return None
+
+    # .../brain/<session_id>/.system_generated/logs/transcript.jsonl -> session_id is parents[2].
+    try:
+        session_id = file_path.parents[2].name
+        fallback_path = str(file_path.parents[2])
+    except IndexError:
+        session_id = file_path.stem
+        fallback_path = str(file_path.parent)
+    project_path = _infer_antigravity_project(records, fallback_path)
+    project_name = Path(project_path).name
+
+    turns = []
+    first_user_text = ""
+    for r in records:
+        r_type = r.get("type")
+        content = r.get("content", "")
+        timestamp = r.get("created_at")
+
+        if r_type == "USER_INPUT":
+            text = _extract_user_request(content)
+            if not text:
+                continue
+            if not first_user_text:
+                first_user_text = text
+            turns.append({"role": "user", "type": "prompt", "content": text, "timestamp": timestamp})
+
+        elif r_type == "PLANNER_RESPONSE":
+            tool_calls = [
+                {"id": tc.get("id", ""), "name": tc.get("name", ""), "input": tc.get("args", {})}
+                for tc in (r.get("tool_calls") or [])
+            ]
+            turns.append({
+                "role": "assistant",
+                "thinking": "",
+                "tool_calls": tool_calls,
+                "content": content or "",
+                "timestamp": timestamp,
+                "model": r.get("model", "Antigravity"),
+            })
+
+        elif r_type in _ANTIGRAVITY_SYSTEM_TYPES:
+            if content:
+                turns.append({"role": "system", "type": (r_type or "system").lower(),
+                              "content": content, "timestamp": timestamp})
+
+        else:
+            # Tool execution / action result (VIEW_FILE, RUN_COMMAND, CODE_ACTION, GREP_SEARCH, ...).
+            if content:
+                is_error = str(r.get("status", "")).upper() in {"ERROR", "FAILED"}
+                turns.append({"role": "user", "type": "tool_result",
+                              "content": f"[{r_type}] {content}", "is_error": is_error,
+                              "timestamp": timestamp})
+
+    if not turns:
+        return None
+
+    title = first_user_text or f"Antigravity Session {session_id[:8]}"
+    if len(title) > 60:
+        title = title[:57] + "..."
+    if first_user_text:
+        title = f"Antigravity: {title}"
+
+    return {
+        "session_id": session_id,
+        "project_path": project_path,
+        "project_name": project_name,
+        "title": title,
+        "turns": turns,
+    }
+
+
+def discover_antigravity_sessions(gemini_dir):
+    """Return [(path, kind)] for every Antigravity transcript under ~/.gemini.
+
+    kind is "transcript" for the modern brain format and "legacy" for the old
+    tmp/*/chats/session-*.json format. When a session has both transcript.jsonl and
+    transcript_full.jsonl, only transcript.jsonl is kept (they duplicate each other)."""
+    gemini_dir = Path(gemini_dir)
+    if not gemini_dir.exists():
+        return []
+    found = []
+    logs_seen = set()
+    # transcript.jsonl first so it wins over transcript_full.jsonl for the same session.
+    for name in ("transcript.jsonl", "transcript_full.jsonl"):
+        pattern = str(gemini_dir / "antigravity-*" / "brain" / "*" / ".system_generated" / "logs" / name)
+        for p in sorted(glob.glob(pattern)):
+            logs_dir = str(Path(p).parent)
+            if logs_dir in logs_seen:
+                continue
+            logs_seen.add(logs_dir)
+            found.append((p, "transcript"))
+    # Legacy format (older Antigravity installs).
+    for p in sorted(glob.glob(str(gemini_dir / "tmp" / "*" / "chats" / "session-*.json"))):
+        found.append((p, "legacy"))
+    return found
+
+
+def count_history_sessions():
+    """Distinct Claude session ids ever recorded in ~/.claude/history.jsonl. This survives the
+    transcript retention cleanup, so it reveals how many sessions once existed."""
+    hist = Path.home() / ".claude" / "history.jsonl"
+    sessions = set()
+    if hist.exists():
+        try:
+            with hist.open(encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    sid = json.loads(line).get("sessionId")
+                    if sid:
+                        sessions.add(sid)
+        except Exception:
+            pass
+    return sessions
+
+
 def _normalize_command(cmd):
     """Collapse whitespace so near-identical commands compare equal."""
     return re.sub(r"\s+", " ", str(cmd)).strip()
@@ -403,6 +579,7 @@ def main():
     
     all_sessions = []
     
+    session_files = []
     if projects_dir.exists():
         session_files = glob.glob(str(projects_dir / "*" / "*.jsonl"))
         print(f"Found {len(session_files)} Claude session files.")
@@ -412,20 +589,37 @@ def main():
             all_sessions.append(session_data)
     else:
         print(f"Claude projects directory not found at {projects_dir}")
-        
-    # 2. Parse Antigravity project sessions
-    gemini_tmp = Path.home() / ".gemini" / "tmp"
-    if gemini_tmp.exists():
-        antigravity_files = glob.glob(str(gemini_tmp / "*" / "chats" / "session-*.json"))
+
+    # Warn when Claude Code's retention cleanup has pruned transcripts we can no longer read.
+    # ~/.claude/history.jsonl keeps prompts for sessions whose full transcripts are already gone.
+    history_sessions = count_history_sessions()
+    on_disk_ids = {Path(sf).stem for sf in session_files}
+    pruned = history_sessions - on_disk_ids
+    if history_sessions and pruned:
+        print(
+            f"\n⚠️  RETENTION WARNING: history.jsonl references {len(history_sessions)} past Claude "
+            f"session(s) but only {len(on_disk_ids)} transcript(s) remain on disk — "
+            f"{len(pruned)} were pruned by Claude Code's `cleanupPeriodDays` retention (default 30 "
+            f"days) and are unrecoverable. To keep more going forward, raise `cleanupPeriodDays` in "
+            f"~/.claude/settings.json (see SKILL.md -> Data retention & coverage).\n"
+        )
+
+    # 2. Parse Antigravity / Gemini sessions (modern brain transcripts + legacy chats format).
+    gemini_dir = Path.home() / ".gemini"
+    antigravity_files = discover_antigravity_sessions(gemini_dir)
+    if antigravity_files:
         print(f"Found {len(antigravity_files)} Antigravity session files.")
-        for af in antigravity_files:
+        for af, kind in antigravity_files:
             print(f"Parsing Antigravity log: {af}...")
-            session_data = parse_antigravity_session(af)
+            if kind == "transcript":
+                session_data = parse_antigravity_transcript(af)
+            else:
+                session_data = parse_antigravity_session(af)
             if session_data:
                 all_sessions.append(session_data)
     else:
-        print(f"Antigravity tmp directory not found at {gemini_tmp}")
-        
+        print(f"No Antigravity sessions found under {gemini_dir}")
+
     # Redact secrets before ANYTHING is written to disk (privacy: these are raw transcripts).
     all_sessions = [redact_session(s) for s in all_sessions]
 

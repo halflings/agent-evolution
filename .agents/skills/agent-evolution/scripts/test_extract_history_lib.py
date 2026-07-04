@@ -5,6 +5,8 @@ from extract_history_lib import (
     clean_user_content,
     parse_session_file,
     parse_antigravity_session,
+    parse_antigravity_transcript,
+    discover_antigravity_sessions,
     redact_secrets,
     compute_signals,
 )
@@ -162,3 +164,71 @@ def test_parse_antigravity_session(tmp_path):
     assert parsed["turns"][2]["role"] == "user"
     assert parsed["turns"][2]["type"] == "tool_result"
     assert "[Tool Result for tool-1]: Search completed successfully" in parsed["turns"][2]["content"]
+
+
+def _write_transcript(tmp_path, session_id, records):
+    logs_dir = tmp_path / "antigravity-cli" / "brain" / session_id / ".system_generated" / "logs"
+    logs_dir.mkdir(parents=True)
+    tpath = logs_dir / "transcript.jsonl"
+    with open(tpath, "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+    return tpath
+
+
+def test_parse_antigravity_transcript(tmp_path):
+    records = [
+        {"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+         "created_at": "2026-05-25T12:53:26Z",
+         "content": "<USER_REQUEST>\nBuild the game\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nnoise\n</ADDITIONAL_METADATA>"},
+        {"step_index": 1, "source": "SYSTEM", "type": "CONVERSATION_HISTORY", "status": "DONE",
+         "created_at": "2026-05-25T12:53:26Z"},
+        {"step_index": 2, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+         "created_at": "2026-05-25T12:53:27Z", "content": "Listing the directory first.",
+         "tool_calls": [{"name": "list_dir", "args": {"DirectoryPath": "/home/user/workspace/craftways"}}]},
+        {"step_index": 3, "source": "MODEL", "type": "RUN_COMMAND", "status": "ERROR",
+         "created_at": "2026-05-25T12:53:28Z", "content": "command failed: boom"},
+        {"step_index": 4, "source": "SYSTEM", "type": "CHECKPOINT", "status": "DONE",
+         "created_at": "2026-05-25T12:53:29Z", "content": "Resuming from a compaction"},
+    ]
+    tpath = _write_transcript(tmp_path, "sess-abc", records)
+    parsed = parse_antigravity_transcript(tpath)
+
+    assert parsed is not None
+    assert parsed["session_id"] == "sess-abc"
+    # Project path inferred from the workspace-scoped tool-call argument.
+    assert parsed["project_path"] == "/home/user/workspace/craftways"
+    assert parsed["project_name"] == "craftways"
+    assert parsed["title"] == "Antigravity: Build the game"
+
+    roles = [(t["role"], t.get("type")) for t in parsed["turns"]]
+    # CONVERSATION_HISTORY has no content -> skipped; the rest map to prompt/assistant/tool/system.
+    assert ("user", "prompt") in roles
+    assert any(r == "assistant" for r, _ in roles)
+    assert ("user", "tool_result") in roles
+    assert ("system", "checkpoint") in roles
+
+    user_turn = parsed["turns"][0]
+    assert user_turn["content"] == "Build the game"  # metadata stripped
+
+    tool_turn = next(t for t in parsed["turns"] if t.get("type") == "tool_result")
+    assert tool_turn["is_error"] is True
+    assert "[RUN_COMMAND]" in tool_turn["content"]
+
+    assistant_turn = next(t for t in parsed["turns"] if t["role"] == "assistant")
+    assert assistant_turn["tool_calls"][0]["name"] == "list_dir"
+
+
+def test_discover_antigravity_prefers_transcript_over_full(tmp_path):
+    session_id = "sess-xyz"
+    logs_dir = tmp_path / "antigravity-cli" / "brain" / session_id / ".system_generated" / "logs"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / "transcript.jsonl").write_text("{}\n", encoding="utf-8")
+    (logs_dir / "transcript_full.jsonl").write_text("{}\n", encoding="utf-8")
+
+    found = discover_antigravity_sessions(tmp_path)
+    # Both files exist for one session, but only transcript.jsonl is kept.
+    assert len(found) == 1
+    path, kind = found[0]
+    assert kind == "transcript"
+    assert path.endswith("transcript.jsonl")
